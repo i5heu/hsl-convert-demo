@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HLS Quality Selector Player with Loader & Reset</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+      margin: 0;
+      background: #f3f3f3;
+    }
+    #videoContainer {
+      position: relative;
+      width: 640px;
+      margin: auto;
+    }
+    video {
+      width: 100%;
+      display: block;
+    }
+    /* Loader overlay styling */
+    #loader {
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 2;
+      color: white;
+      font-size: 24px;
+      text-align: center;
+      line-height: 360px;
+    }
+    #qualityControls {
+      margin-top: 10px;
+      text-align: center;
+    }
+    label {
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>HLS Stream with Quality Selector</h1>
+  <div id="videoContainer">
+    <video id="video" controls autoplay muted></video>
+    <div id="loader">Loading...</div>
+  </div>
+  <div id="qualityControls">
+    <label for="qualitySelector">Quality:</label>
+    <select id="qualitySelector">
+      <option value="-1">Auto</option>
+    </select>
+  </div>
+
+  <!-- Load hls.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <script>
+    const video = document.getElementById('video');
+    const qualitySelector = document.getElementById('qualitySelector');
+    const loader = document.getElementById('loader');
+    const masterPlaylistUrl = 'master.m3u8';
+
+    let pendingQualitySwitch = false;
+
+    // Populate quality levels in the dropdown.
+    function populateQualityLevels(levels) {
+      qualitySelector.innerHTML = '';
+      const autoOption = document.createElement('option');
+      autoOption.value = -1;
+      autoOption.text = 'Auto';
+      qualitySelector.appendChild(autoOption);
+      levels.forEach((level, index) => {
+        const option = document.createElement('option');
+        option.value = index;
+        option.text = `${level.height}p (${Math.round(level.bitrate / 1000)} kbps)`;
+        qualitySelector.appendChild(option);
+      });
+    }
+
+    if (Hls.isSupported()) {
+      const hls = new Hls();
+      hls.loadSource(masterPlaylistUrl);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        populateQualityLevels(hls.levels);
+        video.play();
+      });
+
+      qualitySelector.addEventListener('change', function () {
+        const selected = parseInt(this.value);
+        if (selected === -1) {
+          hls.currentLevel = -1; // Auto mode.
+          console.log("Auto quality mode enabled.");
+        } else {
+          pendingQualitySwitch = true;
+          video.pause();
+          loader.style.display = 'block';
+          hls.currentLevel = selected;
+          console.log(`Quality switch to level ${selected} initiated.`);
+        }
+      });
+
+      // When a new fragment is buffered from the new level, force a "reset" by re-seeking.
+      hls.on(Hls.Events.FRAG_BUFFERED, (event, data) => {
+        // Check that we're in a quality switch and the fragment belongs to the new level.
+        if (pendingQualitySwitch && data.frag.level === hls.currentLevel) {
+          pendingQualitySwitch = false;
+          // Force a seek to the current time to update the media buffer.
+          video.currentTime = video.currentTime;
+          loader.style.display = 'none';
+          video.play();
+          console.log(`Quality switch completed via FRAG_BUFFERED at level ${data.frag.level}.`);
+        }
+      });
+
+      // Also handle the LEVEL_SWITCHED event as backup.
+      hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+        console.log("LEVEL_SWITCHED event: switched to level", data.level);
+        if (pendingQualitySwitch && data.level === hls.currentLevel) {
+          pendingQualitySwitch = false;
+          // Force a re-seek to flush buffer.
+          video.currentTime = video.currentTime;
+          loader.style.display = 'none';
+          video.play();
+          console.log(`Quality switch completed via LEVEL_SWITCHED at level ${data.level}.`);
+        }
+      });
+
+      // Fallback safety timeout.
+      setInterval(() => {
+        if (pendingQualitySwitch) {
+          console.warn("Quality switch timeout. Resuming playback.");
+          pendingQualitySwitch = false;
+          loader.style.display = 'none';
+          video.play();
+        }
+      }, 10000);
+      
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = masterPlaylistUrl;
+      video.addEventListener('loadedmetadata', () => video.play());
+      qualitySelector.style.display = 'none';
+    } else {
+      alert("Your browser does not support HLS streaming.");
+    }
+  </script>
+</body>
+</html>
